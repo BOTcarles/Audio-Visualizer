@@ -1,0 +1,769 @@
+//LOGO TRIANGULAR
+
+float sdEquilateralTriangle( in vec2 p, in float r )
+{
+    const float k = sqrt(3.0);
+    p.x = abs(p.x) - r;
+    p.y = p.y + r/k;
+    if( p.x+k*p.y>0.0 ) p = vec2(p.x-k*p.y,-k*p.x-p.y)/2.0;
+    p.x -= clamp( p.x, -2.0*r, 0.0 );
+    return -length(p)*sign(p.y);
+}
+
+void mainImage( out vec4 fragColor, in vec2 fragCoord )
+{
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    
+    float r = 0.3;
+    
+    float tri = sdEquilateralTriangle(uv,r);
+    tri = abs(tri);
+    tri = smoothstep(0.0,0.15,tri);
+    tri = sin(tri*32.0 + iTime)/32.0;
+    tri = smoothstep(0.0,0.01,tri);
+    
+    fragColor = vec4(tri,tri,tri,1.0);
+}
+
+_________________________________________________________________
+
+//SAMPLING INPUT SOUND
+
+// Created by inigo quilez - iq/2013
+// https://www.youtube.com/c/InigoQuilez
+// https://iquilezles.org/
+
+
+// See also:
+//
+// Input - Keyboard    : https://www.shadertoy.com/view/lsXGzf
+// Input - Microphone  : https://www.shadertoy.com/view/llSGDh
+// Input - Mouse       : https://www.shadertoy.com/view/Mss3zH
+// Input - Sound       : https://www.shadertoy.com/view/Xds3Rr
+// Input - SoundCloud  : https://www.shadertoy.com/view/MsdGzn
+// Input - Time        : https://www.shadertoy.com/view/lsXGz8
+// Input - TimeDelta   : https://www.shadertoy.com/view/lsKGWV
+// Inout - 3D Texture  : https://www.shadertoy.com/view/4llcR4
+
+
+void mainImage( out vec4 fragColor, in vec2 fragCoord )
+{
+    // create pixel coordinates
+    vec2 uv = fragCoord.xy / iResolution.xy;
+
+    // the sound texture is 512x2
+    int tx = int(uv.x*512.0);
+    
+    // first row is frequency data (48Khz/4 in 512 texels, meaning 23 Hz per texel)
+    float fft  = texelFetch( iChannel0, ivec2(tx,0), 0 ).x; 
+
+    // second row is the sound wave, one texel is one mono sample
+    float wave = texelFetch( iChannel0, ivec2(tx,1), 0 ).x;
+	
+    // convert frequency to colors
+    vec3 col = vec3( fft, 4.0*fft*(1.0-fft), 1.0-fft ) * fft;
+
+    // add wave form on top	
+    col += 1.0 -  smoothstep( 0.0, 0.15, abs(wave - uv.y) );
+	
+    // output final color
+    fragColor = vec4(col,1.0);
+}
+
+___________________________________________________________________
+
+//AUDIO VISUALIZER
+
+/* "3D Audio Visualizer" by @kishimisu - 2022 (https://www.shadertoy.com/view/dtl3Dr)
+    
+    This work is licensed under a Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License (https://creativecommons.org/licenses/by-nc-sa/4.0/deed.en)
+
+    Wait for the drop!
+
+   The lights of this scene react live to the audio input.
+   I'm trying to find interesting ways to extract audio
+   features from the audio's FFT to animate my scenes.
+   
+   Each light is associated to a random frequency range,
+   ranging from bass (distant lights) to high (close lights)   
+   
+   Really happy with this result!
+*/
+
+#define st(t1, t2, v1, v2) mix(v1, v2, smoothstep(t1, t2, iTime))
+#define light(d, att) 1. / (1.+pow(abs(d*att), 1.3))
+
+/* Audio-related functions */
+#define getLevel(x) (texelFetch(iChannel0, ivec2(int(x*512.), 0), 0).r)
+#define logX(x,a,c) (1./(exp(-a*(x-c))+1.))
+
+float logisticAmp(float amp){
+   float c = st(0., 10., .8, 1.), a = 20.;  
+   return (logX(amp, a, c) - logX(0.0, a, c)) / (logX(1.0, a, c) - logX(0.0, a, c));
+}
+float getPitch(float freq, float octave){
+   freq = pow(2., freq)   * 261.;
+   freq = pow(2., octave) * freq / 12000.;
+   return logisticAmp(getLevel(freq));
+}
+float getVol(float samples) {
+    float avg = 0.;
+    for (float i = 0.; i < samples; i++) avg += getLevel(i/samples);
+    return avg / samples;
+}
+/* ----------------------- */
+
+float sdBox( vec3 p, vec3 b ) {
+  vec3 q = abs(p) - b;
+  return length(max(q,0.0)) + min(max(q.x,max(q.y,q.z)),0.0);
+}
+float hash13(vec3 p3) {
+	p3  = fract(p3 * .1031);
+    p3 += dot(p3, p3.zyx + 31.32);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+void mainImage( out vec4 fragColor, in vec2 fragCoord ) {
+    vec2 uv   = (2.*fragCoord-iResolution.xy)/iResolution.y;
+    vec3 col  = vec3(0.);
+    float vol = getVol(8.);
+    
+    float hasSound = 1.; // Used only to avoid a black preview image
+    if (iChannelTime[0] <= 0.) hasSound = .0;
+ 
+    for (float i = 0., t = 0.; i < 30.; i++) {
+        vec3 p  = t*normalize(vec3(uv, 1.));        
+        
+        vec3 id = floor(abs(p));
+        vec3 q  = fract(p)-.5;
+        
+        float boxRep = sdBox(q, vec3(.3));
+        float boxCtn = sdBox(p, vec3(7.5, 6.5, 16.5));
+
+        float dst = max(boxRep, abs(boxCtn) - vol*.2);     
+        float freq = smoothstep(16., 0., id.z)*3.*hasSound + hash13(id)*1.5;
+       
+        col += vec3(.8,.6,1) * (cos(id*.4 + vec3(0,1,2) + iTime) + 2.) 
+             * light(dst, 10. - vol) 
+             * getPitch(freq, 1.);
+        
+        t += dst;
+    }
+    
+    fragColor = vec4(col,1.0);   
+}
+
+____________________________________________________
+
+vec3 pal( in float t, in vec3 a, in vec3 b, in vec3 c, in vec3 d )
+{
+    return a + b*cos( 6.28318*(c*t+d) );
+}
+
+float cubicInOut(float t) {
+    if (t < 0.5) {
+        return 4.0 * t * t * t;
+    } else {
+        float f = ((2.0 * t) - 2.0);
+        return 0.5 * f * f * f + 1.0;
+    }
+}
+
+vec2 fishEyeLens(vec2 uv, float strength) {
+    float r = length(uv);
+    float theta = atan(uv.y, uv.x);
+    float distortion = r * strength;
+    return distortion * vec2(cos(theta), sin(theta));
+}
+
+
+void mainImage( out vec4 fragColor, in vec2 fragCoord )
+{
+    // Normalized pixel coordinates (from 0 to 1)
+    vec2 uv = fragCoord/iResolution.xy; // Clip space
+    vec2 uv0 = uv*2.-1.;
+    uv0.x *= iResolution.x/iResolution.y; // Normalized clip space + aspect ratio
+    vec2 uv1 = uv0;
+    vec2 distorted_uv = fishEyeLens(uv, 1.);
+
+    //Init color variable
+    vec3 finalColor = vec3(0.0);
+    
+    float buff = 512.; // Audio buffer size
+    float bpm = 150.; // Tempo in bpm
+    float f = 60. / bpm; // Tempo in Hz
+    float T = 1./f;
+    float w = 2.*3.14159*f; // Tempo in rad/s
+    
+    //Fetch frequency data from audio in iCh0
+    int tx = int(distorted_uv.y*buff);
+    float fft = texelFetch(iChannel0, ivec2(tx,0), 0 ).x;
+    
+    //convert freq to color
+    vec3 col = vec3(fft);
+    col *= pal((-uv.y),vec3(0.520,0.520,0.520),vec3(0.500,0.500,0.500),vec3(1.000,1.000,1.000),vec3(6.067,6.350,6.683) );
+    
+    //Compute average energy
+    float energy = .0;
+    for (int i = 0; i<int(buff);++i)
+        energy += texelFetch(iChannel0, ivec2(i,0),0).x;
+    energy /= buff;
+    float slope = 3.;
+    //the attack of the energy will be higher
+    //energy = (1./slope)*log((exp(slope)-1.)*energy+1.);
+    float progress = mix(smoothstep(0.0, 1.0, energy), cubicInOut(energy), energy);
+    float numIterations = progress * 3.0;
+    
+    //Magic happens
+    float d = 0.;
+    for (float i = 0.; i<numIterations ; ++i)
+    {
+        d = length(uv1)* exp(-length(uv1));
+        d = sin(numIterations*T*d + iTime/numIterations*T)/(numIterations*T);
+        d = abs(d);
+        uv1 = fract(uv1*numIterations)-.5;
+        d = smoothstep(.0,.2,d);
+        d = pow(0.2/d,1.2);
+        finalColor += col * d;
+    }
+    //CD appearance
+    float cd = 0.;
+    cd = length(uv0*energy);
+    cd = sin(1.*cd)/3.;
+    cd = smoothstep(.075,0.125,cd);
+    cd = smoothstep(0.,.2,cd);
+    cd = abs(cd);
+    
+    
+    
+    col = smoothstep(.1,.2,col);
+    
+    finalColor *= col * cd;
+    
+    //finalColor = pow(finalColor/1.,vec3(1.2));
+    
+    
+    fragColor = vec4(finalColor, 1.);
+    
+    
+}
+__________________________________________________
+
+// Mitsync, 2023
+
+/*
+    I did some experiments with the audio inputs in Shadertoy and accidentally wrote documentation for it.
+    Most of this is purely theoretical and does not matter if you just want to draw a pretty graph.
+        The most important part for that is how the frequency axis works:
+            UV coordinates 0.0-1.0 correspond to 0 - 11/12 kHz, linearly.
+            Make this logarithmic to get prettier graphs, as done in helper function `fft_log()` below.
+    If you use code from this file it would be nice if you linked back here :)
+    All testing done in Google Chrome on Windows 10, using signals generated in Audacity:
+        Filetype: uncompressed WAV, samplerate: 44.1 and 48 kHz, sample format: 32-bit float
+    
+    Basics:
+        Audio inputs are accesible in shaders as a 512x2 texture with a single color channel (red).
+        The top row (y-coordinate 1) is the 512 most recent audio samples. Use this to draw a waveform.
+        The bottom row (y-coordinate 0) is 512 points of spectrum between 0 and 11/12 kHz. Use this to draw a spectrum/equaliser.
+        The stored values are medium precision floats between 0.0 and 1.0 inclusive for both the wave and FFT rows.
+            This means silence is a constant value of 0.5 (DC offset).
+        The easiest way to access values is using the `texture()` function:
+            For samples: `texture(iChannelX, vec2(x, 1.0)).r`
+            For spectrum: `texture(iChannelX, vec2(x, 0.0)).r`
+            Where `x` is a float between 0.0 and 1.0 inclusive. Replace `iChannelX` with the channel you're using. The `.r` makes these return a float.
+            Note that this does linear interpolation if you ask a value between two measured values (samples or bins).
+                This can't be disabled with the channel settings, use `texelFetch()` instead.
+        Another way is using the `texelFetch()` function:
+            For samples: `texelFetch(iChannelX, ivec2(x, 1), 0).r`
+            For spectrum: `texelFetch(iChannelX, ivec2(x, 0), 0).r`
+            Where `x` is an integer between 0 and 511 inclusive. Replace `iChannelX` with the channel you're using. The `.r` makes these return a float.
+                Eg: `int x = int(x_float*512.)`
+            This does not do interpolation (as you can only input integers).
+        Or just use the helper functions below. :)
+        All inputs get converted to the samplerate of the audio output on your device before they reach the shader:
+            Setting output to 44.1 kHz (in Windows in my case) means the FFT goes between 0 and 11 kHz for both 44.1 kHz AND 48 kHz sources.
+            The current samplerate is available in the uniform `iSampleRate` (even outside sound shaders, unlike what the official documentation implies)
+        You can import custom audio using this Chrome extension and just dropping a file on one of the input channels:
+            https://chrome.google.com/webstore/detail/shadertoy-custom-texures/jgeibpcndpjboeebilehgbpkopkgkjda
+            Supported filetypes depend on OS and browser.
+
+    FFT specifics:
+        The bottom row (y-coordinate 0) is 512 points of spectrum of the incoming audio signal.
+        The frequency axis is linear between 0 and 1/4 samplerate inclusive (so usually 11025 Hz or 12000 Hz):
+            Minimum UV coordinate (0.0) corresponds to 0 Hz (DC component, this is not removed!).
+            Maximum UV coordinate (1.0) corresponds to 1/4 times the output samplerate (so usually 11025 Hz or 12000 Hz).
+            Frequency resolution (bin size) is 21.5 Hz at 44.1 kHz samplerate, 23.4 Hz at 48 kHz samplerate.
+                These are approximately the differences between F#4 (370.0 Hz), G4 (392.0 Hz), and G#4 (415.3 Hz),
+                    Notes below that can't be accurately distinguished from neighbors.
+            All this implies Shadertoy is resampling, then doing a 2048-point FFT, but only making the first 512 points available.
+                (These are by far the most interesting anyway, we're not losing much)
+                This also means frequencies between 1/4 and 3/4 samplerate do NOT cause aliasing!
+                Frequencies above 3/4 samplerate DO cause aliasing (be careful with pure squarewaves for example).
+        Amplitude is linear with dB power between -87 and -17 dB:
+            Minimum returned value (0.0) corresponds to a signal power of -87 dB or lower.
+            Maximum returned value (1.0) corresponds to -17 dB or higher.
+            Values inbetween are linear with amplitude in dB.
+            Note: values are clipped! It is not possible to measure amplitudes outside this range!
+                Spectrum clipping is common, even (especially!) with properly mastered audio!
+            Amplitude is smoothed over time by what looks like decaying peak-hold.
+                A 0 dB sine takes approximately 0.5 seconds to drop below minimum amplitude (-87 dB).
+        Window is unknown but acts as follows:
+            A pure 0 dB sine at an exact bin frequency (aligned to the pixels) is 5 bins wide (total).
+            A pure 0 dB sine exactly between bins is also 5/6 pixels wide but with 5 extra bins of sidelobe on both sides.
+                So 15 bins around centre have significant value.
+            Harmonics are not surpressed (which is the correct way to do it).
+    
+    Contents of this demo:
+        Comments with example inputs and outputs assume constants as defined at the top of this file
+        Several helper functions for accessing and converting the audio data:
+            Getting amplitude of wave
+            Conversion between musical note, octave and frequency
+    
+    Useful links:
+        Table of notes and frequencies, also coupled to piano, organ and MIDI notes:
+            https://www.inspiredacoustics.com/en/MIDI_note_numbers_and_center_frequencies
+        More may come later
+*/
+
+
+
+/*  ------------------------
+      MACROS AND CONSTANTS
+    ------------------------*/
+
+// Constants
+#define INPUT iChannel0
+#define SAMPLERATE iSampleRate
+// These brackets are required because the preprocessor is dumb
+#define MAX_F (0.25*SAMPLERATE)
+// Reference note for the conversions between note/octave and frequency, a good default is C4, aka middle C, 261.63 Hz
+#define REF_NOTE 261.63
+
+// Macros
+#define ILN10 0.4343
+
+/*  --------------------
+      HELPER FUNCTIONS
+    --------------------*/
+
+// GETTING WAVE DATA
+// Get wave amplitude at UV coordinate (input between 0.0 and 1.0 inclusive)
+float wave(in float x)                  {  return texture(INPUT, vec2(x, 1.0)).r;  }
+// Get wave amplitude of sample, so not interpolated (input between 0 and 511 inclusive)
+float wave(in int s)                    {  return texelFetch(INPUT, ivec2(s, 0), 1).r;  }
+
+// GETTING FFT DATA
+// Get FFT at UV coordinate (input between 0.0 and 1.0 inclusive)
+float fft(in float x)                   {  return texture(INPUT, vec2(x, 0.0)).r;  }
+// Get FFT of frequency bin, so not interpolated (input between 0 and 511 inclusive)
+float fft(in int bin)                   {  return texelFetch(INPUT, ivec2(bin, 0), 0).r;  }
+// Get FFT of frequency (input between 0.0 and MAX_F)
+float fft_freq(in float freq)           {  return fft(freq/MAX_F);  }
+// Get FFT of log UV coordinate, between 50 and 10000 Hz (input between 0.0 and 1.0 inclusive) (!! use this one for pretty graphs !!)
+float fft_log(in float x)               {  return fft(50. * pow(10.0, 2.3*x) / MAX_F);  }
+
+// CONVERTING AMPLITUDE REPRESENTATIONS
+// Convert the amplitude returned from FFT to decibel power or amplitude
+float fft_to_db(in float val)           {  return 70.*val - 87.;  }
+float fft_to_amplitude(in float val)    {  return pow(10., fft_to_db(val)/10.);  }
+
+// Convert between decibel power and amplitude
+float amplitude_to_db(in float amp)     {  return 20.*log(amp)*ILN10;  }
+float db_to_amplitude(in float db)      {  return pow(10., db/20.);  }
+
+// CONVERTING FREQUENCY REPRESENTATIONS
+// Convert between octave relative to REF_NOTE and frequency (0.=C4, -1.=C3, (2./12.)=D4, etc.)
+// This is similar to volt/octave in modular synthesis
+float octave_to_freq(in float octave)   {  return REF_NOTE * exp2(octave);  }
+float freq_to_octave(in float freq)     {  return log2(freq / REF_NOTE);  }
+
+// Convert between note relative to REF_NOTE and frequency (0.=C4, -12.=C3, 2.=D4, etc.)
+float note_to_freq(in float note)       {  return REF_NOTE * exp2(note/12.);  }
+float freq_to_note(in float freq)       {  return log2(freq / REF_NOTE) * 12.;  }
+
+// Convert between note and octave (note 12. is octave 1., note -18. is octave -1.5)
+float note_to_octave(in float note)     {  return note / 12.;  }
+float octave_to_note(in float octave)   {  return octave * 12.;  }
+
+// Round frequency to that of nearest note
+float round_to_note(in float freq)      {  return note_to_freq(round(freq_to_note(freq)));  }
+
+// OTHER
+// Construct a grayscale colour from a single float
+vec4 col(in float val)                  {  return vec4(val, val, val, 1.0);  }
+// Construct a RG colour from a vec2
+vec4 col(in vec2 val)                   {  return vec4(val, 0.0, 1.0);  }
+// Construct a RGB colour from a vec3
+vec4 col(in vec3 val)                   {  return vec4(val, 1.0);  }
+
+// TODO: note with sum harmonics???
+// Summed power at first through fourth harmonics of this frequency (in dB)
+float freq_harmonic_power(in float freq) {
+    vec4 amp;
+    amp.x = fft_to_amplitude(fft_freq(freq));
+    amp.y = fft_to_amplitude(fft_freq(2. * freq));
+    amp.z = fft_to_amplitude(fft_freq(3. * freq));
+    amp.w = fft_to_amplitude(fft_freq(4. * freq));
+    return amplitude_to_db(amp.x + amp.y + amp.z + amp.w);
+}
+// Get FFT amplitude of note
+float fft_note(in float note)           {  return fft_freq(note_to_freq(note));  }
+
+// Get approximate total volume by summing FFT
+float total_power() {
+    float sum = 0.0;
+    for (int i = 32; i < 512; i += 8) {
+        sum += fft(i);
+    }
+    return 8. * sum / 480.;
+}
+
+
+
+/*  -----------------------
+      MAIN IMAGE FUNCTION
+    -----------------------*/
+
+void mainImage( out vec4 fragColor, in vec2 fragCoord )
+{
+    // Normalized pixel coordinates (from 0 to 1)
+    vec2 uv = fragCoord/iResolution.xy;
+    
+    float avg_pwr = total_power();
+
+    float note = 72.*uv.x - 24.;
+    float p_cont = fft_note(note);
+    float p_note = fft_note(round(note));
+    
+    vec3 p_neighbors;
+    p_neighbors.x = fft_note(round(note)-1.0);
+    p_neighbors.y = fft_note(round(note));
+    p_neighbors.z = fft_note(round(note)+1.0);
+    float p_rel = dot(p_neighbors, vec3(-0.45, 1.0, -0.45));
+    p_rel = p_rel/(uv.x+1.);
+    
+    // Contrived example
+    float amp_c4 = fft_to_amplitude(fft_freq(note_to_freq(0.0)));
+    
+    fragColor = abs(uv.y-p_cont) < 0.005 ? col(1.0) : (abs(uv.y-p_rel) < 0.005 ? col(1.0) : col(pow(p_rel*1., 7.)));
+    fragColor += abs(uv.y-avg_pwr) < 0.005 ? col(1.0) : col(0.0);
+    //fragColor = col(fft(uv.x));
+}
+
+
+
+_______________________________________________________________________________
+
+/*
+ Strobing lights effect warning! Discretion is advised.
+ This is a (trippy) Audio Visualizer. Reads the audio file from iChannel0, extracts the fft coefficients and use it for the visuals.
+ Also, uses the energy for additional effects.
+*/
+
+#define SAMPLERATE iSampleRate
+// These brackets are required because the preprocessor is dumb
+#define MAX_F (0.25*SAMPLERATE)
+// Reference note for the conversions between note/octave and frequency, a good default is C4, aka middle C, 261.63 Hz
+#define REF_NOTE 261.63
+
+vec3 pal( in float t, in vec3 a, in vec3 b, in vec3 c, in vec3 d ) {
+    return a + b*cos( 6.28318*(c*t+d) );
+}
+
+float cubicInOut(float t) {
+    if (t < 0.5) {
+        return 4.0 * t * t * t;
+    } else {
+        float f = ((2.0 * t) - 2.0);
+        return 0.5 * f * f * f + 1.0;
+    }
+}
+
+float progress(float t) {
+    return mix(smoothstep(0.0, 1.0, t), cubicInOut(t), t);
+}
+
+vec2 fishEyeLens(vec2 uv, float strength) {
+    
+    float aspectRatio = iResolution.x / iResolution.y;
+    
+    // Convert UV to polar coordinates
+    float radius = length(uv);
+    float angle = atan(uv.y, uv.x);
+
+    // Apply fisheye distortion
+    radius = sqrt(1.0 - exp(-radius * strength)) / sqrt(1.0 - exp(-strength));
+    
+    // Convert back to Cartesian coordinates
+    uv.x = radius * cos(angle);
+    uv.y = radius * sin(angle);
+    uv = 0.5 * (uv + 1.0);
+    
+    // Remap the UV coordinates back to the screen space
+    return uv;
+}
+
+float sdEquilateralTriangle( in vec2 p, in float r )
+{
+    const float k = sqrt(3.0);
+    p.x = abs(p.x) - r;
+    p.y = p.y + r/k;
+    if( p.x+k*p.y>0.0 ) p = vec2(p.x-k*p.y,-k*p.x-p.y)/2.0;
+    p.x -= clamp( p.x, -2.0*r, 0.0 );
+    return -length(p)*sign(p.y);
+}
+
+void mainImage( out vec4 fragColor, in vec2 fragCoord )
+{
+    // Normalized pixel coordinates (from 0 to 1)
+    vec2 uv = fragCoord/iResolution.xy; // Clip space
+    vec2 uv0 = uv*2.-1.;
+    uv0.x *= iResolution.x/iResolution.y; // Normalized clip space + aspect ratio
+    vec2 uv1 = uv0;
+
+    //Init color variable
+    vec3 finalColor = vec3(1.0);
+    
+    float buff = 512.; // Audio buffer size
+    float bpm = 148.; // Tempo in bpm
+    float f = bpm / 60.; // Tempo in Hz
+    float T = 1./f;
+    float w = 2.*3.14159*f; // Tempo in rad/s
+    
+    //Fetch frequency data from audio in iCh0
+    //Make it radial
+    float rad = pow(length(uv0),2.)*.24;
+    float rad_buff = rad * buff;
+    float fft = texelFetch(iChannel0, ivec2(rad_buff,0), 0 ).x;
+    
+    //fft(freq/MAX_F);
+    
+    //convert freq to color
+    vec3 col = vec3(fft);
+    col = smoothstep(.0,0.7,col);
+    col *= pal(rad,vec3(0.520,0.520,0.520),vec3(0.500,0.500,0.500),vec3(1.000,1.000,1.000),vec3(6.067,6.350,6.683) );
+    //Compute average energy and energy per band
+    float energy = .0, lows= 0., mids = 0., highs = 0.;
+    for (int i = 0; i<int(buff);++i)
+    {
+        energy += texelFetch(iChannel0, ivec2(i,0),0).x;
+        if (i<int(buff/3.))
+            lows += texelFetch(iChannel0, ivec2(i,0),0).x;
+        else if (i<int(2.*buff/3.))
+            mids += texelFetch(iChannel0, ivec2(i,0),0).x;
+        else
+            highs += texelFetch(iChannel0, ivec2(i,0),0).x;
+    }
+    energy /= buff;
+    lows /= buff/3.;
+    mids /= buff/3.;
+    highs /= buff/3.;
+    
+    //energy will have kind of a sigmoidal shape in the range X(0,1) -> Y(0,1)
+    energy = progress(energy);
+    lows = progress(lows);
+    mids = progress(mids);
+    highs = progress(highs);
+    float numIterations = energy * 3.0; //same shape scaled X(0,1) -> Y(0,3)
+    
+    //spherical contour
+    float r = 0.3;
+    float sph = 1.0;
+    sph = length(uv1* lows);
+    sph -= 6.*r;
+    sph = abs(sph);
+    sph = smoothstep(0.2,1.,sph);
+    
+    finalColor *= sph;
+    finalColor *=col;
+    
+    //for (float i = 0.; i<numIterations;i++){
+    float tri= 1.0;
+    float xy_freq = 16.;
+    float t_freq = w;
+    tri = sdEquilateralTriangle(uv1,r*lows);
+    tri = abs(tri);
+    tri = abs(tri);
+    tri = 0.2/tri;
+    tri *= energy/**i*/*tri;
+
+    finalColor*=tri;
+    //}
+    
+    //HDR
+    finalColor = finalColor / (finalColor + vec3(1.0));
+    finalColor = pow(finalColor, vec3(1.0/2.2));
+    
+    fragColor = vec4(finalColor, 1.);
+    
+    
+}
+________________________________________________________
+
+/*
+ Strobing lights effect warning! Discretion is advised.
+ This is a (trippy) Audio Visualizer. Reads the audio file from iChannel0, extracts the fft coefficients and use it for the visuals.
+ Also, uses the energy for additional effects.
+*/
+
+#define SAMPLERATE iSampleRate
+// These brackets are required because the preprocessor is dumb
+#define MAX_F (0.25*SAMPLERATE)
+// Reference note for the conversions between note/octave and frequency, a good default is C4, aka middle C, 261.63 Hz
+#define REF_NOTE 261.63
+
+vec3 pal( in float t, in vec3 a, in vec3 b, in vec3 c, in vec3 d ) {
+    return a + b*cos( 6.28318*(c*t+d) );
+}
+
+float cubicInOut(float t) {
+    if (t < 0.5) {
+        return 4.0 * t * t * t;
+    } else {
+        float f = ((2.0 * t) - 2.0);
+        return 0.5 * f * f * f + 1.0;
+    }
+}
+
+float progress(float t) {
+    return mix(smoothstep(0.0, 1.0, t), cubicInOut(t), t);
+}
+
+vec2 fishEyeLens(vec2 uv, float strength) {
+    
+    float aspectRatio = iResolution.x / iResolution.y;
+    
+    // Convert UV to polar coordinates
+    float radius = length(uv);
+    float angle = atan(uv.y, uv.x);
+
+    // Apply fisheye distortion
+    radius = sqrt(1.0 - exp(-radius * strength)) / sqrt(1.0 - exp(-strength));
+    
+    // Convert back to Cartesian coordinates
+    uv.x = radius * cos(angle);
+    uv.y = radius * sin(angle);
+    uv = 0.5 * (uv + 1.0);
+    
+    // Remap the UV coordinates back to the screen space
+    return uv;
+}
+
+float sdEquilateralTriangle( in vec2 p, in float r )
+{
+    const float k = sqrt(3.0);
+    p.x = abs(p.x) - r;
+    p.y = p.y + r/k;
+    if( p.x+k*p.y>0.0 ) p = vec2(p.x-k*p.y,-k*p.x-p.y)/2.0;
+    p.x -= clamp( p.x, -2.0*r, 0.0 );
+    return -length(p)*sign(p.y);
+}
+
+float sdSnowflakeTriangle(in vec2 p, in float r, in float iterations) {
+    float k = sqrt(3.0);
+    p.x = abs(p.x) - r;
+    p.y = p.y + r / k;
+    if (p.x + k * p.y > 0.0) {
+        p = vec2(p.x - k * p.y, -k * p.x - p.y) / 2.0;
+    }
+    p.x -= clamp(p.x, -2.0 * r, 0.0);
+    
+    // Apply the snowflake fractal
+    for (float i = 0.; i < iterations; i++) {
+        p = abs(p) - r;
+        p *= 0.5;
+        p = mat2(cos(3.14159 / 3.0), -sin(3.14159 / 3.0), sin(3.14159 / 3.0), cos(3.14159 / 3.0)) * p;
+    }
+    
+    return -length(p) * sign(p.y);
+}
+
+void mainImage( out vec4 fragColor, in vec2 fragCoord )
+{
+    // Normalized pixel coordinates (from 0 to 1)
+    vec2 uv = fragCoord/iResolution.xy; // Clip space
+    vec2 uv0 = uv*2.-1.;
+    uv0.x *= iResolution.x/iResolution.y; // Normalized clip space + aspect ratio
+    vec2 uv1 = uv0;
+
+    //Init color variable
+    vec3 finalColor = vec3(1.0);
+    
+    float buff = 512.; // Audio buffer size
+    float bpm = 128.; // Tempo in bpm
+    float f = bpm / 60.; // Tempo in Hz
+    float T = 1./f;
+    float w = 2.*3.14159*f; // Tempo in rad/s
+    
+    //Fetch frequency data from audio in iCh0
+    //Make it radial
+    float rad = pow(length(uv0),2.)*.24;
+    float rad_buff = rad * buff;
+    float fft = texelFetch(iChannel0, ivec2(rad_buff,0), 0 ).x;
+    
+    //fft(freq/MAX_F);
+    
+    //convert freq to color
+    vec3 col = vec3(fft);
+    col = smoothstep(.0,0.7,col);
+    col *= pal(rad,vec3(0.520,0.520,0.520),vec3(0.500,0.500,0.500),vec3(1.000,1.000,1.000),vec3(6.067,6.350,6.683) );
+    //Compute average energy and energy per band
+    float energy = .0, lows= 0., mids = 0., highs = 0.;
+    for (int i = 0; i<int(buff);++i)
+    {
+        energy += texelFetch(iChannel0, ivec2(i,0),0).x;
+        if (i<int(buff/3.))
+            lows += texelFetch(iChannel0, ivec2(i,0),0).x;
+        else if (i<int(2.*buff/3.))
+            mids += texelFetch(iChannel0, ivec2(i,0),0).x;
+        else
+            highs += texelFetch(iChannel0, ivec2(i,0),0).x;
+    }
+    energy /= buff;
+    lows /= buff/3.;
+    mids /= buff/3.;
+    highs /= buff/3.;
+    
+    //energy will have kind of a sigmoidal shape in the range X(0,1) -> Y(0,1)
+    energy = progress(energy);
+    lows = progress(lows);
+    mids = progress(mids);
+    highs = progress(highs);
+    float numIterations = energy * 3.0; //same shape scaled X(0,1) -> Y(0,3)
+    numIterations = smoothstep(0.,1.,numIterations);
+    
+    //spherical contour
+    float r = 0.3;
+    float sph = 1.0;
+    sph = length(uv1* lows);
+    sph -= 6.*r;
+    sph = abs(sph);
+    sph = smoothstep(0.2,1.,sph);
+    
+    //finalColor *= sph;
+    //finalColor *= col;
+    for (float i = 0.; i<numIterations;i++){
+        float tri= 1.0;
+        tri = sdSnowflakeTriangle(uv1,r*energy,3.);
+        tri = abs(tri);
+        tri = smoothstep(.0,0.6,tri);
+        //tri = smoothstep(0.,1.,tri);
+        //tri = sdEquilateralTriangle(uv1,r*energy*1.5);
+        tri = sin(100.*tri+ iTime);
+        tri = abs(tri);
+        tri = energy*0.2/tri;
+        tri *= 1./numIterations;
+
+        col*=tri;
+    }
+    finalColor*=col;
+    //HDR
+    finalColor = finalColor / (finalColor + vec3(1.0));
+    finalColor = pow(finalColor, vec3(1.0/2.2));
+    
+    fragColor = vec4(finalColor, 1.);
+    
+    
+}
+
+_________________________________________________________

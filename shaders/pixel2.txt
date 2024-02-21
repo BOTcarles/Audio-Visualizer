@@ -1,0 +1,24 @@
+#version 330 core
+
+uniform sampler2D u_audioTexture; // Audio texture
+uniform float u_time; // Time in seconds
+uniform vec2 u_resolution; // Window resolution (width, height)
+
+out vec4 fragColor;
+
+void main() {
+    // Normalize gl_FragCoord to the range [0, 1]
+    vec2 uv = gl_FragCoord.xy / u_resolution;
+
+    // Texture coordinate (assuming texture width is 512)
+    int tx = int(uv.x * 512.0);
+
+    // Sample the red channel of the audio texture
+    float wave = texelFetch(u_audioTexture, ivec2(tx, 0), 0).r;
+
+    // Create a color based on the difference between the wave value and the y-coordinate
+    vec3 col = vec3(1.0 - smoothstep(0.0, 0.1, abs(wave - uv.y)));
+
+    // Set the alpha channel to 1.0 for full opacity
+    fragColor = vec4(col, 1.0);
+}

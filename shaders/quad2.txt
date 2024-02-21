@@ -1,0 +1,13 @@
+#version 330 core
+layout(location = 0) in vec2 inPosition;
+uniform sampler2D dataTexture;
+uniform float amplitudeScale;
+
+void main() {
+
+    // Calculate the new y-coordinate based on the red channel and amplitude scale
+    float newY = inPosition.y;
+
+    // Set the new position
+    gl_Position = vec4(inPosition.x, newY, 0.0, 1.0);
+}

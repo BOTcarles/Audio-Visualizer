@@ -1,0 +1,26 @@
+#version 330 core
+
+uniform sampler2D u_audioTexture; // Audio texture
+uniform vec2 u_resolution; // Window resolution (width, height)
+
+out vec4 fragColor;
+
+void main() {
+    vec2 uv = gl_FragCoord.xy / u_resolution;
+    //uv.x = uv.x * u_resolution.y/u_resolution.x;
+
+    // the sound texture is 512x2
+    int tx = int(uv.x*512.0);
+
+    //sound wave, one texel is one mono sample
+    float wave = texelFetch( u_audioTexture, ivec2(tx,0), 0 ).x;
+
+    //frequency data (48Khz/4 in 512 texels, meaning 23 Hz per texel)
+    float fft  = texelFetch( u_audioTexture, ivec2(tx,1), 0 ).x; 
+
+    // add wave form
+    vec3 col = vec3( fft, 4.0*fft*(1.0-fft), 1.0-fft ) * fft;
+    col += 1.0 -  smoothstep( 0.0, 0.15, abs(wave - uv.y) );	
+    
+    fragColor = vec4(col, 1.0);
+}
